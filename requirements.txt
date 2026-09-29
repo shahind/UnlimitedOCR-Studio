@@ -1,0 +1,14 @@
+# Install CUDA PyTorch FIRST (the model's code only runs on an NVIDIA GPU):
+#   pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128
+# then:  pip install -r requirements.txt
+transformers==4.57.1
+accelerate
+einops
+addict
+easydict
+Pillow>=11
+pymupdf>=1.26
+psutil
+matplotlib
+markdown
+PySide6>=6.8
