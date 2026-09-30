@@ -18,30 +18,44 @@ API limits. The output keeps:
   of VRAM and was tested on an RTX 4060 Laptop GPU with 8 GB.
 - Python 3.10–3.13. An existing CUDA PyTorch installation is reused.
 
-## Windows download
+## Download
 
-Download `UnlimitedOCR-Studio-<version>-win64.zip` (under 100 KB) from
-[Releases](https://github.com/shahind/UnlimitedOCR-Studio/releases) and extract it. Then run
-**`UnlimitedOCR-Studio.exe`**. On first use it runs Setup (described below) and then opens the app.
+Both packages are on [Releases](https://github.com/shahind/UnlimitedOCR-Studio/releases) and are under 100 KB each.
+On first use each one runs Setup (described below) and then opens the app.
+
+- **Windows:** extract `UnlimitedOCR-Studio-<version>-win64.zip` and run **`UnlimitedOCR-Studio.exe`**.
+- **Linux (x86_64):** extract the tarball and run the launcher:
+
+  ```bash
+  tar -xzf UnlimitedOCR-Studio-<version>-linux-x86_64.tar.gz
+  ./UnlimitedOCR-Studio/UnlimitedOCR-Studio
+  ```
+
+  Setup can also add the app to your applications menu.
 
 ## Setup
 
 Setup doesn't create a virtual environment and doesn't download anything you already have:
 
-1. It finds the Python installations on the PC and prefers one that already has CUDA PyTorch.
+1. It finds the Python installations (the `py` launcher, PATH and conda environments) and prefers one that
+   already has CUDA PyTorch.
 2. It lists exactly what is missing, with download sizes and free disk space, and asks before continuing.
-3. It installs only the missing packages. CUDA PyTorch (~2.9 GB) is installed only if PyTorch is absent or CPU-only.
+3. It installs only the missing packages. CUDA PyTorch (~2.9 GB on Windows, ~3.6 GB on Linux) is installed only if
+   PyTorch is absent, CPU-only or older than 2.4.
 4. It downloads the OCR model `baidu/Unlimited-OCR` (~6.3 GB) to the Hugging Face cache, unless it is already there.
    Set `HF_HOME` to keep the model on another drive.
+5. On Linux, some distributions block pip for the system Python (Debian 12+, Ubuntu 23.04+). There, setup creates a
+   small environment in `~/.local/share/UnlimitedOCR-Studio/env` that shares the system's packages, so nothing is
+   downloaded twice. It also prints the `apt install` command if system libraries needed by Qt are missing.
 
 ```bash
-python install.py                 # interactive; on Windows you can double-click setup.bat
+python install.py                 # interactive; or double-click setup.bat (Windows) / run ./setup.sh (Linux)
 python install.py --dry-run       # only show the plan
 python install.py --python C:\path\to\python.exe   # use a specific interpreter / conda env
 python install.py --skip-model -y
 ```
 
-The chosen interpreter is saved in `python_path.txt`, which `run_gui.bat` and the `.exe` launcher use.
+The chosen interpreter is saved in `python_path.txt`, which the launchers use.
 
 To install manually instead, run the following. Install CUDA PyTorch first only if you don't have it.
 
@@ -53,7 +67,7 @@ python ocr_engine.py --download-model
 
 ## GUI
 
-Double-click **`run_gui.bat`**, or run `python app.py [files…]`.
+Run **`run_gui.bat`** (Windows) or **`./run_gui.sh`** (Linux), or run `python app.py [files…]`.
 
 1. **Add files**, or drag and drop PDFs, images or folders onto the window.
    To convert only some pages, edit the **Range** column (e.g. `1-3,7,10-`).
@@ -100,6 +114,6 @@ and a simple page takes 10–20 s. The GUI keeps the model loaded between files.
 - `md_render.py`: Markdown to HTML conversion with protected LaTeX (used by the preview and the HTML export).
 - `app.py`: the PySide6 GUI.
 - `tests/`: model-free tests for the post-processing (`python -m pytest tests`).
-- `install.py`, `setup.bat`, `run_gui.bat`: setup and launch scripts.
-- `build_windows.py`, `packaging/`: build the Windows release zip (C# launcher with icon, compiled by the C# compiler
-  built into Windows) and the icon generator.
+- `install.py`, `setup.bat`/`setup.sh`, `run_gui.bat`/`run_gui.sh`: setup and launch scripts.
+- `build_release.py`, `packaging/`: build the release packages and the icon generator.
+  The Windows launcher is written in C# and compiled by the C# compiler built into Windows.
