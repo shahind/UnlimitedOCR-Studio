@@ -97,6 +97,91 @@ class Cancelled(Exception):
 
 
 # ----------------------------------------------------------------------------------------------
+# Model download (setup step)
+# ----------------------------------------------------------------------------------------------
+
+MODEL_FILES = ["*.json", "*.py", "*.safetensors", "*.txt"]
+MODEL_SIZE_FALLBACK = 6_780_000_000     # bytes, used when the Hub can't be reached for exact sizes
+
+
+def model_cache_dir() -> Path:
+    from huggingface_hub import constants
+    return Path(constants.HF_HUB_CACHE)
+
+
+def model_is_available(model_name: str = DEFAULT_MODEL) -> bool:
+    """True if the model is a local folder or already fully downloaded to the Hugging Face cache."""
+    if Path(model_name).is_dir():
+        return True
+    from huggingface_hub import snapshot_download
+    try:
+        snapshot_download(model_name, allow_patterns=MODEL_FILES, local_files_only=True)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def model_download_size(model_name: str = DEFAULT_MODEL) -> int:
+    """Total bytes of the model files on the Hub."""
+    import fnmatch
+    from huggingface_hub import HfApi
+    try:
+        info = HfApi().model_info(model_name, files_metadata=True)
+        return sum(s.size or 0 for s in info.siblings
+                   if any(fnmatch.fnmatch(s.rfilename, p) for p in MODEL_FILES)) or MODEL_SIZE_FALLBACK
+    except Exception:  # noqa: BLE001
+        return MODEL_SIZE_FALLBACK
+
+
+def free_space(path: Path) -> int:
+    path = Path(path)
+    while not path.exists() and path.parent != path:
+        path = path.parent
+    return shutil.disk_usage(path).free
+
+
+def _dir_bytes(path: Path) -> int:
+    total = 0
+    for f in path.rglob("*"):
+        try:
+            if f.is_file() and not f.is_symlink():
+                total += f.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def download_model(model_name: str = DEFAULT_MODEL,
+                   on_progress: Callable[[int, int], None] = lambda done, total: None,
+                   cancel: threading.Event | None = None) -> Path:
+    """Download the model to the Hugging Face cache, reporting (bytes_done, bytes_total) about twice a second."""
+    from huggingface_hub import snapshot_download
+    total = model_download_size(model_name)
+    repo_dir = model_cache_dir() / ("models--" + model_name.replace("/", "--"))
+    start = _dir_bytes(repo_dir) if repo_dir.exists() else 0
+    result: dict = {}
+
+    def work():
+        try:
+            result["path"] = snapshot_download(model_name, allow_patterns=MODEL_FILES)
+        except BaseException as e:  # noqa: BLE001
+            result["error"] = e
+
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    while t.is_alive():
+        t.join(0.5)
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()      # the daemon thread stops with the process; partial files resume next time
+        done = _dir_bytes(repo_dir) if repo_dir.exists() else 0
+        on_progress(min(max(done, start), total), total)
+    if "error" in result:
+        raise result["error"]
+    on_progress(total, total)
+    return Path(result["path"])
+
+
+# ----------------------------------------------------------------------------------------------
 # Input handling
 # ----------------------------------------------------------------------------------------------
 
@@ -452,9 +537,41 @@ def save_document(doc: DocResult, dest: str | Path, markdown_text: str | None = 
 # CLI
 # ----------------------------------------------------------------------------------------------
 
+def gib(n: int) -> str:
+    return f"{n / 2**30:.1f} GB"
+
+
+def cli_download(model_name: str, yes: bool = False):
+    if model_is_available(model_name):
+        print(f"Model {model_name} is already downloaded.")
+        return
+    need, where = model_download_size(model_name), model_cache_dir()
+    free = free_space(where)
+    print(f"Model {model_name}\n  download size : {gib(need)}\n  location      : {where}\n"
+          f"  free space    : {gib(free)}")
+    if free < need + 2**30:
+        sys.exit(f"Not enough free space: need about {gib(need + 2**30)}. Free up space or set the HF_HOME "
+                 "environment variable to a folder on a larger drive.")
+    if not yes and input("Download now? [Y/n] ").strip().lower() not in ("", "y", "yes"):
+        print("Skipped. The model will be downloaded on first use instead.")
+        return
+    t0 = time.time()
+
+    def show(done, total):
+        rate = done / max(time.time() - t0, 1e-3)
+        print(f"\r  {gib(done)} / {gib(total)}  ({100 * done / total:.0f}%, {rate / 2**20:.0f} MB/s)   ",
+              end="", flush=True)
+
+    path = download_model(model_name, show)
+    print(f"\nDownloaded to {path}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="PDF/image -> Markdown with Baidu Unlimited-OCR")
-    ap.add_argument("inputs", nargs="+", help="PDF or image files")
+    ap.add_argument("inputs", nargs="*", help="PDF or image files")
+    ap.add_argument("--download-model", action="store_true",
+                    help="download the model (shows size and free space first) and exit if no inputs")
+    ap.add_argument("-y", "--yes", action="store_true", help="don't ask for confirmation")
     ap.add_argument("-o", "--out-dir", help="output folder (default: next to each input)")
     ap.add_argument("-f", "--format", choices=["md", "txt", "html"], default="md")
     ap.add_argument("--pages", default="", help="page range, e.g. '1-3,7,10-'")
@@ -470,6 +587,12 @@ def main(argv=None):
     ap.add_argument("--model", default=DEFAULT_MODEL, help="HF repo id or local folder")
     ap.add_argument("-q", "--quiet", action="store_true", help="don't stream text to the console")
     a = ap.parse_args(argv)
+    if a.download_model:
+        cli_download(a.model, a.yes)
+        if not a.inputs:
+            return
+    if not a.inputs:
+        ap.error("no input files given")
 
     settings = OCRSettings(mode=a.mode, dpi=a.dpi, max_new_tokens=a.max_tokens, pages_per_chunk=a.chunk,
                            dollar_math=not a.keep_tex_delims, page_markers=not a.no_page_markers,

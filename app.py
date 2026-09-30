@@ -15,11 +15,12 @@ from pathlib import Path
 
 import ocr_engine  # noqa: F401  (sets up stdout for pythonw before torch/transformers import)
 from ocr_engine import (DEFAULT_MODEL, IMAGE_EXTS, MODES, Cancelled, DocResult, OCREngine, OCRSettings,
-                        PageResult, count_pages, save_document)
+                        PageResult, count_pages, download_model, free_space, model_cache_dir,
+                        model_download_size, model_is_available, save_document)
 from md_render import render_html
 
 from PySide6.QtCore import QSettings, QSize, Qt, QThread, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
                                QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSpinBox, QSplitter,
@@ -69,6 +70,7 @@ class FileJob:
 class Worker(QThread):
     status = Signal(str)
     model_ready = Signal(str)
+    download_progress = Signal(float, float)          # bytes done, bytes total
     file_started = Signal(int, int)                    # row, pages to do
     page_started = Signal(int, int, int, int, str)     # row, done, total, page_index, png
     token = Signal(str)
@@ -87,10 +89,20 @@ class Worker(QThread):
         self.engine.cancel()
 
     def run(self):
+        self.engine._cancel.clear()
         try:
             if not self.engine.loaded:
+                if not model_is_available(self.engine.model_name):
+                    self.status.emit(f"Downloading {self.engine.model_name}…")
+                    download_model(self.engine.model_name, lambda d, t: self.download_progress.emit(d, t),
+                                   self.engine._cancel)
                 self.engine.load(self.status.emit)
                 self.model_ready.emit(self.engine.model_name)
+        except Cancelled:
+            for row, *_ in self.jobs:
+                self.file_stopped.emit(row)
+            self.status.emit("Model download stopped; it resumes on the next Start.")
+            return
         except Exception as e:  # noqa: BLE001
             for row, *_ in self.jobs:
                 self.file_failed.emit(row, f"Model failed to load: {e}")
@@ -519,6 +531,20 @@ class MainWindow(QMainWindow):
             return
         self._save_prefs()
         model = self.model_name.text().strip() or DEFAULT_MODEL
+        if (self.engine is None or not self.engine.loaded) and not model_is_available(model):
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            need, where = model_download_size(model), model_cache_dir()
+            QApplication.restoreOverrideCursor()
+            room = free_space(where)
+            msg = (f"The OCR model has not been downloaded yet.\n\n"
+                   f"Model:\t{model}\nDownload:\t{need / 2**30:.1f} GB\nLocation:\t{where}\n"
+                   f"Free space:\t{room / 2**30:.1f} GB\n\n")
+            if room < need + 2**30:
+                QMessageBox.critical(self, APP_NAME, msg + "There is not enough free space. Free up space or set "
+                                     "the HF_HOME environment variable to a folder on a larger drive.")
+                return
+            if QMessageBox.question(self, APP_NAME, msg + "Download it now?") != QMessageBox.Yes:
+                return
         if self.engine is None or self.engine.model_name != model:
             if self.engine is not None:
                 self.engine.unload()
@@ -532,6 +558,7 @@ class MainWindow(QMainWindow):
         w = self.worker
         w.status.connect(self.statusBar().showMessage)
         w.model_ready.connect(lambda m: self.speed.setText("model loaded"))
+        w.download_progress.connect(self.on_download_progress)
         w.file_started.connect(self.on_file_started)
         w.page_started.connect(self.on_page_started)
         w.token.connect(self.on_token)
@@ -551,7 +578,14 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Stopping after the current step…")
 
     # ------------------------------------------------------------------ worker callbacks
+    def on_download_progress(self, done: float, total: float):
+        self.progress.setFormat("model %p%")
+        self.progress.setMaximum(1000)
+        self.progress.setValue(int(1000 * done / max(total, 1)))
+        self.statusBar().showMessage(f"Downloading model: {done / 2**30:.2f} / {total / 2**30:.2f} GB")
+
     def on_file_started(self, row: int, n: int):
+        self.progress.setFormat("%v / %m pages")
         self.progress.setMaximum(self.run_total)
         self.set_status(row, f"Running 0/{n}")
         self.table.selectRow(row)
@@ -808,10 +842,29 @@ def fmt_time(s: float) -> str:
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--cli":   # command-line mode, also in the standalone .exe
+        from ocr_engine import main as cli_main
+        if Path(sys.executable).name.lower() == "pythonw.exe":   # no console (launcher .exe): log to a file
+            log = open("UnlimitedOCR-cli.log", "w", encoding="utf-8", buffering=1)
+            sys.stdout = sys.stderr = log
+        try:
+            cli_main(sys.argv[2:])
+        except SystemExit:
+            raise
+        except BaseException:
+            traceback.print_exc()
+            sys.exit(1)
+        return
     os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu-compositing")
+    if sys.platform == "win32":   # own taskbar entry/icon instead of python.exe's
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("UnlimitedOCR.Studio")
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setStyle("Fusion")
+    icon = Path(__file__).resolve().parent / "assets" / "icon.ico"
+    if icon.exists():
+        app.setWindowIcon(QIcon(str(icon)))
     w = MainWindow()
     w.show()
     w.add_files([a for a in sys.argv[1:] if Path(a).exists()])

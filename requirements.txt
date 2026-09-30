@@ -1,14 +1,16 @@
-# Install CUDA PyTorch FIRST (the model's code only runs on an NVIDIA GPU):
-#   pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128
-# then:  pip install -r requirements.txt
-transformers==4.57.1
+# PyTorch with CUDA is required but NOT listed here, so an existing installation is reused.
+# install.py (Setup.bat) installs the CUDA build only if it is missing:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# Ranges instead of pins so already-installed versions are kept where possible.
+transformers>=4.51,<5
 accelerate
 einops
 addict
 easydict
-Pillow>=11
-pymupdf>=1.26
+Pillow>=10
+pymupdf>=1.24
 psutil
 matplotlib
 markdown
-PySide6>=6.8
+huggingface_hub
+PySide6>=6.7

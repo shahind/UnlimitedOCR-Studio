@@ -1,3 +1,5 @@
+<img src="assets/icon.png" width="96" align="right" alt="">
+
 # Unlimited-OCR Studio
 
 This tool converts PDFs (and page images) to **Markdown**, **plain text** or **HTML**. It uses Baidu's
@@ -14,34 +16,44 @@ API limits. The output keeps:
 
 - Windows/Linux with an **NVIDIA GPU with at least 8 GB of VRAM**. The model's code is CUDA-only. It uses about 6.3 GB
   of VRAM and was tested on an RTX 4060 Laptop GPU with 8 GB.
-- Python 3.11–3.13.
+- Python 3.10–3.13. An existing CUDA PyTorch installation is reused.
+
+## Windows download
+
+Download `UnlimitedOCR-Studio-<version>-win64.zip` (under 100 KB) from
+[Releases](https://github.com/shahind/UnlimitedOCR-Studio/releases) and extract it. Then run
+**`UnlimitedOCR-Studio.exe`**. On first use it runs Setup (described below) and then opens the app.
 
 ## Setup
 
-Run the setup script. It creates `.venv`, installs CUDA PyTorch and the requirements, and optionally downloads the
-model:
+Setup doesn't create a virtual environment and doesn't download anything you already have:
+
+1. It finds the Python installations on the PC and prefers one that already has CUDA PyTorch.
+2. It lists exactly what is missing, with download sizes and free disk space, and asks before continuing.
+3. It installs only the missing packages. CUDA PyTorch (~2.9 GB) is installed only if PyTorch is absent or CPU-only.
+4. It downloads the OCR model `baidu/Unlimited-OCR` (~6.3 GB) to the Hugging Face cache, unless it is already there.
+   Set `HF_HOME` to keep the model on another drive.
 
 ```bash
-python install.py --download-model
+python install.py                 # interactive; on Windows you can double-click setup.bat
+python install.py --dry-run       # only show the plan
+python install.py --python C:\path\to\python.exe   # use a specific interpreter / conda env
+python install.py --skip-model -y
 ```
 
-On Windows you can double-click **`setup.bat`** instead, which does the same thing.
-Use `python install.py --no-venv` to install into your current environment.
+The chosen interpreter is saved in `python_path.txt`, which `run_gui.bat` and the `.exe` launcher use.
 
-Or do it manually:
+To install manually instead, run the following. Install CUDA PyTorch first only if you don't have it.
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
+python ocr_engine.py --download-model
 ```
-
-The first run downloads the model (~6.7 GB) to the Hugging Face cache.
 
 ## GUI
 
-Double-click **`run_gui.bat`**, or run `.venv\Scripts\python app.py [files…]`.
+Double-click **`run_gui.bat`**, or run `python app.py [files…]`.
 
 1. **Add files**, or drag and drop PDFs, images or folders onto the window.
    To convert only some pages, edit the **Range** column (e.g. `1-3,7,10-`).
@@ -70,9 +82,9 @@ saved `.md` is unaffected.
 ## Command line
 
 ```bash
-.venv\Scripts\python ocr_engine.py paper.pdf                       # -> paper.md + paper_images/
-.venv\Scripts\python ocr_engine.py a.pdf b.pdf -o out --format html
-.venv\Scripts\python ocr_engine.py scan.pdf --pages 1-5 --mode base -q
+python ocr_engine.py paper.pdf                       # -> paper.md + paper_images/
+python ocr_engine.py a.pdf b.pdf -o out --format html
+python ocr_engine.py scan.pdf --pages 1-5 --mode base -q
 ```
 
 Run `python ocr_engine.py -h` for all options (`--keep-tex-delims`, `--keep-headers`, `--no-figures`, …).
@@ -84,7 +96,10 @@ and a simple page takes 10–20 s. The GUI keeps the model loaded between files.
 
 ## Files
 
-- `ocr_engine.py`: model loading, PDF rendering, OCR, Markdown post-processing, saving, and the CLI.
+- `ocr_engine.py`: model download, model loading, PDF rendering, OCR, Markdown post-processing, saving, and the CLI.
 - `md_render.py`: Markdown to HTML conversion with protected LaTeX (used by the preview and the HTML export).
 - `app.py`: the PySide6 GUI.
 - `tests/`: model-free tests for the post-processing (`python -m pytest tests`).
+- `install.py`, `setup.bat`, `run_gui.bat`: setup and launch scripts.
+- `build_windows.py`, `packaging/`: build the Windows release zip (C# launcher with icon, compiled by the C# compiler
+  built into Windows) and the icon generator.
